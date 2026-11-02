@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jam & Jadwal Sholat</title>
+<style>
+  :root{--bg:#0b1d1a;--card:#12302b;--accent:#f2c14e;--text:#f4f1e8;--muted:#9fb8b2}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--text);
+    font-family:system-ui,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden;cursor:none}
+  .wrap{height:100%;display:grid;grid-template-rows:auto auto 1fr auto auto;padding:2.5vh 4vw;gap:1.6vh}
+  .top{text-align:center}
+  #clock{font-size:17vh;font-weight:700;letter-spacing:.02em;line-height:1;font-variant-numeric:tabular-nums}
+  #clock small{font-size:.38em;color:var(--accent);margin-left:.15em}
+  #date{font-size:5vh;margin-top:1vh}
+  #hijri{font-size:3.6vh;color:var(--muted);margin-top:.5vh}
+  .next{text-align:center;background:var(--card);border-radius:2vh;padding:2vh;
+    border:.4vh solid var(--accent)}
+  .next .label{font-size:3.4vh;color:var(--muted)}
+  .next .count{font-size:9vh;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+  .times{display:grid;grid-template-columns:repeat(8,1fr);gap:1vw;align-items:stretch}
+  .t{background:var(--card);border-radius:2vh;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:1vh;border:.4vh solid transparent}
+  .t .n{font-size:3vh;color:var(--muted)}
+  .t .v{font-size:5.6vh;font-weight:700;font-variant-numeric:tabular-nums}
+  .t .im{font-size:2.1vh;color:var(--accent);min-height:3vh;text-align:center}
+  .t.info{opacity:.55}
+  .week{display:grid;grid-template-columns:repeat(5,1fr);gap:1vw}
+  .week .d{background:var(--card);border-radius:1.4vh;padding:1vh .5vw;text-align:center;
+    border:.3vh solid transparent}
+  .week .d .dn{font-size:2.4vh;color:var(--muted)}
+  .week .d .in{font-size:3vh;font-weight:600}
+  .week .d.today{border-color:var(--accent);background:#1a4a42}
+  .week .d.today .dn{color:var(--accent)}
+  .t.active{border-color:var(--accent);background:#1a4a42}
+  .t.active .n{color:var(--accent)}
+  .foot{text-align:center;color:var(--muted);font-size:2.4vh;min-height:3vh}
+  .foot.warn{color:#ff9e80;font-size:3vh;font-weight:700}
+  #alert .a4{display:none;font-size:4vh;font-weight:700;color:#ff9e80;margin-top:2vh;padding:1.5vh 3vw;
+    border:.4vh solid #ff9e80;border-radius:2vh}
+  #alert .a4.show{display:block}
+  #alert{position:fixed;inset:0;background:rgba(5,20,18,.97);display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:3vh;z-index:10;text-align:center}
+  #alert.show{display:flex}
+  #alert .a1{font-size:6vh;color:var(--muted)}
+  #alert .a2{font-size:18vh;font-weight:800;color:var(--accent)}
+  #alert .a3{font-size:5vh}
+  @media (max-width:900px){.times{grid-template-columns:repeat(4,1fr)}.t .v{font-size:4vh}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div id="clock">--:--<small>:--</small></div>
+    <div id="date"></div>
+    <div id="hijri"></div>
+  </div>
+  <div class="next">
+    <div class="label" id="nextLabel">Memuat jadwal...</div>
+    <div class="count" id="count">--:--:--</div>
+  </div>
+  <div class="times" id="times"></div>
+  <div class="week" id="week"></div>
+  <div class="foot" id="foot">Klik layar / tekan OK untuk mengaktifkan suara adzan</div>
+</div>
+
+<div id="alert">
+  <div class="a1">Telah masuk waktu</div>
+  <div class="a2" id="alertName"></div>
+  <div class="a3" id="alertSub"></div>
+  <div class="a4" id="tap">SUARA DIBLOKIR BROWSER - klik layar / tekan OK untuk menyalakan adzan</div>
+</div>
+
+<script>
+/* ====== PENGATURAN: ubah di sini ====== */
+const CONFIG = {
+  place: "Semarang",
+  lat: -6.9667,               // koordinat Kota Semarang
+  lng: 110.4167,
+  method: 20,                 // 20 = Kemenag RI
+  tz: "Asia/Jakarta",         // WIB. WITA: Asia/Makassar, WIT: Asia/Jayapura
+  alertSeconds: 240,          // lama minimal layar peringatan (otomatis menyesuaikan panjang adzan)
+  adhanFile: "adhan.mp3",     // taruh file ini satu folder dengan HTML (opsional)
+  offsetMinutes: {}           // koreksi manual, contoh: { Fajr: 2, Isha: 1 }
+};
+/* ====================================== */
+
+/* ====== JADWAL IMAM (Senin-Jumat) ======
+   1=Senin ... 5=Jumat. Sabtu & Minggu tidak ada jadwal.
+   Cara isi:
+   - satu nama untuk semua sholat hari itu:  1: "Ustad Tomi"
+   - atau per sholat:  1: { Fajr:"Ustad Tomi", Dhuhr:"Ustad Roy", default:"Ustad Hadi" }
+   Kode sholat: Fajr, Dhuhr, Asr, Maghrib, Isha */
+const IMAM = {
+  1: "Ustad Tomi",
+  2: "Ustad Harjanto",
+  3: "Ustad Hadi",
+  4: "Ustad Iwan",
+  5: "Ustad Roy"
+};
+const HARI = { 1: "Senin", 2: "Selasa", 3: "Rabu", 4: "Kamis", 5: "Jumat" };
+/* ======================================== */
+
+/* ====== DATABASE JADWAL SHOLAT LOKAL (Semarang) ======
+   Format: "TAHUN-BULAN-TANGGAL": [Imsyak, Shubuh, Terbit, Dhuha, Dzuhur, Ashr, Maghrib, Isya, Hijriah]
+   Sumber: tabel jadwal Oktober & November 2026. Tanggal di luar tabel ini
+   otomatis diambil dari internet (Kemenag RI). Untuk bulan baru, tambahkan barisnya di sini. */
+const JADWAL = {
+  "2026-10-01": ["03:58", "04:08", "05:22", "05:46", "11:30", "14:38", "17:35", "18:44", "18 Rabi'ul Akhir 1448"],
+  "2026-10-02": ["03:58", "04:08", "05:21", "05:45", "11:30", "14:37", "17:35", "18:44", "19 Rabi'ul Akhir 1448"],
+  "2026-10-03": ["03:57", "04:07", "05:21", "05:45", "11:29", "14:36", "17:35", "18:44", "20 Rabi'ul Akhir 1448"],
+  "2026-10-04": ["03:56", "04:06", "05:20", "05:44", "11:29", "14:36", "17:34", "18:44", "21 Rabi'ul Akhir 1448"],
+  "2026-10-05": ["03:56", "04:06", "05:20", "05:44", "11:29", "14:35", "17:34", "18:44", "22 Rabi'ul Akhir 1448"],
+  "2026-10-06": ["03:55", "04:05", "05:19", "05:43", "11:29", "14:34", "17:34", "18:44", "23 Rabi'ul Akhir 1448"],
+  "2026-10-07": ["03:55", "04:05", "05:19", "05:43", "11:28", "14:33", "17:34", "18:44", "24 Rabi'ul Akhir 1448"],
+  "2026-10-08": ["03:54", "04:04", "05:18", "05:42", "11:28", "14:32", "17:34", "18:44", "25 Rabi'ul Akhir 1448"],
+  "2026-10-09": ["03:54", "04:04", "05:18", "05:42", "11:28", "14:31", "17:34", "18:44", "26 Rabi'ul Akhir 1448"],
+  "2026-10-10": ["03:53", "04:03", "05:17", "05:41", "11:27", "14:30", "17:34", "18:44", "27 Rabi'ul Akhir 1448"],
+  "2026-10-11": ["03:53", "04:03", "05:17", "05:41", "11:27", "14:29", "17:34", "18:44", "28 Rabi'ul Akhir 1448"],
+  "2026-10-12": ["03:52", "04:02", "05:16", "05:40", "11:27", "14:28", "17:34", "18:44", "29 Rabi'ul Akhir 1448"],
+  "2026-10-13": ["03:52", "04:02", "05:16", "05:40", "11:27", "14:29", "17:34", "18:44", "1 Jumadil Awal 1448"],
+  "2026-10-14": ["03:51", "04:01", "05:15", "05:39", "11:26", "14:30", "17:34", "18:44", "2 Jumadil Awal 1448"],
+  "2026-10-15": ["03:51", "04:01", "05:15", "05:39", "11:26", "14:30", "17:34", "18:44", "3 Jumadil Awal 1448"],
+  "2026-10-16": ["03:50", "04:00", "05:14", "05:38", "11:26", "14:31", "17:34", "18:44", "4 Jumadil Awal 1448"],
+  "2026-10-17": ["03:50", "04:00", "05:14", "05:38", "11:26", "14:31", "17:33", "18:44", "5 Jumadil Awal 1448"],
+  "2026-10-18": ["03:49", "03:59", "05:14", "05:38", "11:25", "14:32", "17:33", "18:44", "6 Jumadil Awal 1448"],
+  "2026-10-19": ["03:49", "03:59", "05:13", "05:37", "11:25", "14:32", "17:33", "18:44", "7 Jumadil Awal 1448"],
+  "2026-10-20": ["03:48", "03:58", "05:13", "05:37", "11:25", "14:33", "17:33", "18:44", "8 Jumadil Awal 1448"],
+  "2026-10-21": ["03:48", "03:58", "05:12", "05:36", "11:25", "14:33", "17:33", "18:44", "9 Jumadil Awal 1448"],
+  "2026-10-22": ["03:47", "03:57", "05:12", "05:36", "11:25", "14:34", "17:33", "18:44", "10 Jumadil Awal 1448"],
+  "2026-10-23": ["03:47", "03:57", "05:12", "05:36", "11:25", "14:34", "17:34", "18:44", "11 Jumadil Awal 1448"],
+  "2026-10-24": ["03:46", "03:56", "05:11", "05:35", "11:24", "14:35", "17:34", "18:45", "12 Jumadil Awal 1448"],
+  "2026-10-25": ["03:46", "03:56", "05:11", "05:35", "11:24", "14:35", "17:34", "18:45", "13 Jumadil Awal 1448"],
+  "2026-10-26": ["03:45", "03:55", "05:11", "05:35", "11:24", "14:36", "17:34", "18:45", "14 Jumadil Awal 1448"],
+  "2026-10-27": ["03:45", "03:55", "05:11", "05:35", "11:24", "14:36", "17:34", "18:45", "15 Jumadil Awal 1448"],
+  "2026-10-28": ["03:45", "03:55", "05:10", "05:34", "11:24", "14:37", "17:34", "18:45", "16 Jumadil Awal 1448"],
+  "2026-10-29": ["03:44", "03:54", "05:10", "05:34", "11:24", "14:37", "17:34", "18:45", "17 Jumadil Awal 1448"],
+  "2026-10-30": ["03:44", "03:54", "05:10", "05:34", "11:24", "14:38", "17:34", "18:46", "18 Jumadil Awal 1448"],
+  "2026-10-31": ["03:43", "03:53", "05:09", "05:33", "11:24", "14:38", "17:34", "18:46", "19 Jumadil Awal 1448"],
+  "2026-11-01": ["03:43", "03:53", "05:09", "05:33", "11:24", "14:39", "17:34", "18:46", "20 Jumadil Awal 1448"],
+  "2026-11-02": ["03:43", "03:53", "05:09", "05:33", "11:24", "14:39", "17:34", "18:46", "21 Jumadil Awal 1448"],
+  "2026-11-03": ["03:42", "03:52", "05:09", "05:33", "11:24", "14:40", "17:35", "18:47", "22 Jumadil Awal 1448"],
+  "2026-11-04": ["03:42", "03:52", "05:09", "05:33", "11:24", "14:40", "17:35", "18:47", "23 Jumadil Awal 1448"],
+  "2026-11-05": ["03:42", "03:52", "05:09", "05:33", "11:24", "14:41", "17:35", "18:47", "24 Jumadil Awal 1448"],
+  "2026-11-06": ["03:41", "03:51", "05:08", "05:32", "11:24", "14:41", "17:35", "18:48", "25 Jumadil Awal 1448"],
+  "2026-11-07": ["03:41", "03:51", "05:08", "05:32", "11:24", "14:42", "17:35", "18:48", "26 Jumadil Awal 1448"],
+  "2026-11-08": ["03:41", "03:51", "05:08", "05:32", "11:24", "14:42", "17:35", "18:48", "27 Jumadil Awal 1448"],
+  "2026-11-09": ["03:41", "03:51", "05:08", "05:32", "11:24", "14:43", "17:36", "18:49", "28 Jumadil Awal 1448"],
+  "2026-11-10": ["03:40", "03:50", "05:08", "05:32", "11:24", "14:43", "17:36", "18:49", "29 Jumadil Awal 1448"],
+  "2026-11-11": ["03:40", "03:50", "05:08", "05:32", "11:24", "14:44", "17:36", "18:49", "30 Jumadil Awal 1448"],
+  "2026-11-12": ["03:40", "03:50", "05:08", "05:32", "11:24", "14:44", "17:36", "18:50", "1 Jumadil Akhir 1448"],
+  "2026-11-13": ["03:40", "03:50", "05:08", "05:32", "11:24", "14:45", "17:37", "18:50", "2 Jumadil Akhir 1448"],
+  "2026-11-14": ["03:40", "03:50", "05:08", "05:32", "11:24", "14:45", "17:37", "18:51", "3 Jumadil Akhir 1448"],
+  "2026-11-15": ["03:39", "03:49", "05:08", "05:32", "11:24", "14:46", "17:37", "18:51", "4 Jumadil Akhir 1448"],
+  "2026-11-16": ["03:39", "03:49", "05:08", "05:32", "11:25", "14:46", "17:38", "18:51", "5 Jumadil Akhir 1448"],
+  "2026-11-17": ["03:39", "03:49", "05:08", "05:32", "11:25", "14:47", "17:38", "18:52", "6 Jumadil Akhir 1448"],
+  "2026-11-18": ["03:39", "03:49", "05:08", "05:32", "11:25", "14:47", "17:38", "18:52", "7 Jumadil Akhir 1448"],
+  "2026-11-19": ["03:39", "03:49", "05:08", "05:32", "11:25", "14:48", "17:39", "18:53", "8 Jumadil Akhir 1448"],
+  "2026-11-20": ["03:39", "03:49", "05:08", "05:32", "11:25", "14:48", "17:39", "18:53", "9 Jumadil Akhir 1448"],
+  "2026-11-21": ["03:39", "03:49", "05:08", "05:32", "11:26", "14:49", "17:39", "18:54", "10 Jumadil Akhir 1448"],
+  "2026-11-22": ["03:39", "03:49", "05:08", "05:32", "11:26", "14:49", "17:40", "18:54", "11 Jumadil Akhir 1448"],
+  "2026-11-23": ["03:39", "03:49", "05:08", "05:32", "11:26", "14:50", "17:40", "18:55", "12 Jumadil Akhir 1448"],
+  "2026-11-24": ["03:39", "03:49", "05:08", "05:32", "11:26", "14:50", "17:40", "18:55", "13 Jumadil Akhir 1448"],
+  "2026-11-25": ["03:39", "03:49", "05:09", "05:33", "11:27", "14:51", "17:41", "18:56", "14 Jumadil Akhir 1448"],
+  "2026-11-26": ["03:39", "03:49", "05:09", "05:33", "11:27", "14:51", "17:41", "18:56", "15 Jumadil Akhir 1448"],
+  "2026-11-27": ["03:39", "03:49", "05:09", "05:33", "11:27", "14:52", "17:42", "18:57", "16 Jumadil Akhir 1448"],
+  "2026-11-28": ["03:39", "03:49", "05:09", "05:33", "11:28", "14:52", "17:42", "18:57", "17 Jumadil Akhir 1448"],
+  "2026-11-29": ["03:39", "03:49", "05:09", "05:33", "11:28", "14:53", "17:43", "18:58", "18 Jumadil Akhir 1448"],
+  "2026-11-30": ["03:39", "03:49", "05:10", "05:34", "11:28", "14:54", "17:43", "18:58", "19 Jumadil Akhir 1448"]
+};
+/* ===================================================== */
+
+const ROWS = [
+  { id: "Imsak",   name: "Imsyak",  sholat: false },
+  { id: "Fajr",    name: "Shubuh",  sholat: true  },
+  { id: "Sunrise", name: "Terbit",  sholat: false },
+  { id: "Dhuha",   name: "Dhuha",   sholat: false },
+  { id: "Dhuhr",   name: "Dzuhur",  sholat: true  },
+  { id: "Asr",     name: "Ashr",    sholat: true  },
+  { id: "Maghrib", name: "Maghrib", sholat: true  },
+  { id: "Isha",    name: "Isya",    sholat: true  }
+];
+
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2, "0");
+let data = null;          // { key, t:{Fajr:"04:00",...}, hijri }
+let unlocked = false, ctx = null, wakeLock = null, loading = true;
+let needTap = false, audioProblem = false;   // needTap: suara diblokir browser; audioProblem: adhan.mp3 tak termuat
+const fired = {};         // penanda adzan yang sudah dibunyikan
+let alertUntil = 0;
+
+/* waktu "sekarang" di zona waktu yang dipilih (tidak bergantung jam perangkat TV) */
+function wib() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: CONFIG.tz, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false
+  }).formatToParts(new Date());
+  const o = {};
+  parts.forEach(p => o[p.type] = p.value);
+  return { y: +o.year, m: +o.month, d: +o.day, h: (+o.hour) % 24, mi: +o.minute, s: +o.second };
+}
+const dayKey = w => `${pad(w.d)}-${pad(w.m)}-${w.y}`;
+const isoKey = w => `${w.y}-${pad(w.m)}-${pad(w.d)}`;
+
+function setFoot() {
+  let s;
+  if (!data && !loading) s = "Gagal memuat jadwal. Periksa koneksi internet.";
+  else if (!unlocked) s = "SUARA BELUM AKTIF - klik layar / tekan OK sekali agar adzan berbunyi";
+  else if (audioProblem) s = "File adhan.mp3 tidak ditemukan - alarm memakai bunyi beep. Taruh adhan.mp3 satu folder dengan halaman ini";
+  else if (!data) s = "Memuat jadwal...";
+  else s = `Jadwal sholat ${CONFIG.place}` +
+    (data.src === "db" ? " • data lokal" : " • Kemenag RI (online)") +
+    (data.stale ? " • jadwal tersimpan" : "");
+  $("foot").textContent = s;
+  $("foot").classList.toggle("warn", !unlocked || audioProblem);
+}
+
+/* ambil jadwal hari ini dari database lokal */
+function fromDB(w) {
+  const r = JADWAL[isoKey(w)];
+  if (!r) return null;
+  const ids = ["Imsak", "Fajr", "Sunrise", "Dhuha", "Dhuhr", "Asr", "Maghrib", "Isha"];
+  const t = {};
+  ids.forEach((id, i) => t[id] = r[i]);
+  return { key: dayKey(w), t, hijri: r[8] + " H", src: "db" };
+}
+
+/* hari dalam seminggu di zona waktu terpilih: 0=Minggu ... 6=Sabtu */
+function dow() {
+  const s = new Intl.DateTimeFormat("en-US", { timeZone: CONFIG.tz, weekday: "short" }).format(new Date());
+  return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[s];
+}
+function imamFor(day, id) {
+  const v = IMAM[day];
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  return v[id] || v.default || "";
+}
+function buildWeek() {
+  const el = $("week");
+  el.innerHTML = "";
+  [1, 2, 3, 4, 5].forEach(d => {
+    const v = IMAM[d];
+    const nm = !v ? "-" : (typeof v === "string" ? v : (v.default || "Bergantian"));
+    const x = document.createElement("div");
+    x.className = "d";
+    x.id = "w-" + d;
+    x.innerHTML = `<div class="dn">${HARI[d]}</div><div class="in">${nm}</div>`;
+    el.appendChild(x);
+  });
+}
+function renderImam() {
+  const day = dow();
+  ROWS.forEach(r => {
+    $("i-" + r.id).textContent = r.sholat ? imamFor(day, r.id) : "";
+  });
+  [1, 2, 3, 4, 5].forEach(d => $("w-" + d).classList.toggle("today", d === day));
+}
+
+/* ---- build kartu waktu ---- */
+const timesEl = $("times");
+ROWS.forEach(r => {
+  const d = document.createElement("div");
+  d.className = "t" + (r.sholat ? "" : " info");
+  d.id = "c-" + r.id;
+  d.innerHTML = `<div class="n">${r.name}</div><div class="v" id="v-${r.id}">--:--</div>` +
+                `<div class="im" id="i-${r.id}"></div>`;
+  timesEl.appendChild(d);
+});
+buildWeek();
+renderImam();
+
+/* ---- ambil jadwal (API Aladhan, metode Kemenag RI) ---- */
+async function loadSchedule() {
+  const w = wib(), key = dayKey(w);
+  const local = fromDB(w);              // 1) database lokal dulu
+  if (local) {
+    data = local;
+    loading = false;
+    setFoot();
+    render();
+    return;
+  }
+  try {                                  // 2) di luar database -> ambil dari internet
+    const url = `https://api.aladhan.com/v1/timings/${key}` +
+      `?latitude=${CONFIG.lat}&longitude=${CONFIG.lng}` +
+      `&method=${CONFIG.method}&timezonestring=${encodeURIComponent(CONFIG.tz)}`;
+    const res = await fetch(url);
+    const j = await res.json();
+    if (j.code !== 200) throw new Error("API");
+    const t = {};
+    ["Imsak", "Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"]
+      .forEach(k => t[k] = String(j.data.timings[k]).slice(0, 5));
+    const [sh, sm] = t.Sunrise.split(":").map(Number);   // Dhuha = terbit + 24 menit (pola tabel Kemenag)
+    const dm = sh * 60 + sm + 24;
+    t.Dhuha = `${pad(Math.floor(dm / 60))}:${pad(dm % 60)}`;
+    const h = j.data.date.hijri;
+    data = { key, t, hijri: `${h.day} ${h.month.en} ${h.year} H` };
+    localStorage.setItem("jadwalSholat", JSON.stringify(data));
+  } catch (e) {
+    // cadangan: pakai jadwal tersimpan terakhir (selisih biasanya hanya 1 menit/hari)
+    try {
+      const c = JSON.parse(localStorage.getItem("jadwalSholat"));
+      if (c) { data = { ...c, stale: true }; }
+    } catch (_) {}
+  }
+  loading = false;
+  setFoot();
+  render();
+}
+
+function secOf(id) {
+  const [h, m] = data.t[id].split(":").map(Number);
+  return h * 3600 + m * 60 + (CONFIG.offsetMinutes[id] || 0) * 60;
+}
+
+function render() {
+  if (!data) return;
+  ROWS.forEach(r => {
+    const s = secOf(r.id);
+    $("v-" + r.id).textContent = `${pad(Math.floor(s / 3600) % 24)}:${pad(Math.floor(s / 60) % 60)}`;
+  });
+  $("hijri").textContent = data.hijri || "";
+}
+
+/* ---- suara ---- */
+const adhan = new Audio(CONFIG.adhanFile);
+adhan.preload = "auto";
+adhan.addEventListener("error", () => { audioProblem = true; setFoot(); });   // file tidak ada / tidak bisa dibaca
+
+function beep() {
+  try {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    for (let i = 0; i < 4; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = i % 2 ? 660 : 880;
+      o.connect(g); g.connect(ctx.destination);
+      const t0 = ctx.currentTime + i * 0.9;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.4, t0 + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.8);
+      o.start(t0); o.stop(t0 + 0.85);
+    }
+  } catch (_) {}
+}
+function showTap(on) { needTap = on; $("tap").classList.toggle("show", on); }
+function playAlarm() {
+  adhan.currentTime = 0;
+  const p = adhan.play();
+  if (p && p.then) {
+    p.then(() => showTap(false)).catch(err => {
+      if (err && err.name === "NotAllowedError") showTap(true);   // diblokir browser -> minta klik layar
+      else { audioProblem = true; setFoot(); beep(); }            // adhan.mp3 tidak ada -> bunyi beep
+    });
+  }
+}
+async function unlock() {
+  if (unlocked) return;
+  unlocked = true;
+  setFoot();
+  try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); ctx.resume(); } catch (_) {}
+  try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch (_) {}
+  try { if (!document.fullscreenElement) await document.documentElement.requestFullscreen(); } catch (_) {}
+}
+function gesture() {
+  unlock();
+  // jika adzan sedang berlangsung tetapi suara diblokir, putar sekarang
+  if (needTap && $("alert").classList.contains("show") && Date.now() < alertUntil) playAlarm();
+}
+document.addEventListener("click", gesture);
+document.addEventListener("keydown", e => {
+  gesture();
+  if (e.key === "t" || e.key === "T") triggerAlert("Tes", true);   // tombol T = tes alarm
+});
+
+/* ---- peringatan layar penuh ---- */
+function triggerAlert(name, test, imam) {
+  $("alertName").textContent = name;
+  $("alertSub").textContent = test ? "Ini hanya tes alarm"
+    : (imam ? `Imam: ${imam}` : "Mari tunaikan sholat");
+  $("alert").classList.add("show");
+  // layar tampil minimal alertSeconds, atau sepanjang file adzan + 10 detik jika lebih panjang
+  const audioSec = isFinite(adhan.duration) ? adhan.duration + 10 : 0;
+  alertUntil = Date.now() + (test ? 8000 : Math.max(CONFIG.alertSeconds, audioSec) * 1000);
+  playAlarm();   // selalu dicoba; jika diblokir browser, muncul permintaan klik di layar
+}
+
+/* ---- loop utama ---- */
+function tick() {
+  const w = wib(), nowS = w.h * 3600 + w.mi * 60 + w.s;
+  $("clock").innerHTML = `${pad(w.h)}:${pad(w.mi)}<small>:${pad(w.s)}</small>`;
+  $("date").textContent = new Intl.DateTimeFormat("id-ID", {
+    timeZone: CONFIG.tz, weekday: "long", day: "numeric", month: "long", year: "numeric"
+  }).format(new Date());
+
+  // ganti hari -> perbarui sorotan jadwal imam
+  if (tick.last !== dayKey(w)) { tick.last = dayKey(w); renderImam(); }
+
+  if (!data) {                           // belum ada jadwal -> coba lagi tiap 1 menit
+    if (!tick.retry || Date.now() - tick.retry > 60000) { tick.retry = Date.now(); loadSchedule(); }
+    return;
+  }
+  if (!data.hijri) {
+    $("hijri").textContent = new Intl.DateTimeFormat("id-ID-u-ca-islamic-umalqura", {
+      timeZone: CONFIG.tz, day: "numeric", month: "long", year: "numeric"
+    }).format(new Date());
+  }
+
+  // sholat berikutnya
+  const list = ROWS.filter(r => r.sholat).map(r => ({ r, s: secOf(r.id) }));
+  let nxt = list.find(x => x.s > nowS);
+  let diff;
+  if (nxt) diff = nxt.s - nowS;
+  else { nxt = list[0]; diff = nxt.s + 86400 - nowS; }
+
+  $("nextLabel").textContent = `Menuju ${nxt.r.name}`;
+  $("count").textContent = `${pad(Math.floor(diff / 3600))}:${pad(Math.floor(diff / 60) % 60)}:${pad(diff % 60)}`;
+  ROWS.forEach(r => $("c-" + r.id).classList.toggle("active", r.id === nxt.r.id));
+
+  // alarm saat masuk waktu
+  list.forEach(x => {
+    const k = dayKey(w) + x.r.id;
+    if (nowS >= x.s && nowS < x.s + 60 && !fired[k]) {
+      fired[k] = true;
+      triggerAlert(x.r.name, false, imamFor(dow(), x.r.id));
+    }
+  });
+  if ($("alert").classList.contains("show") && Date.now() > alertUntil) {
+    $("alert").classList.remove("show");
+    showTap(false);
+    adhan.pause();
+  }
+
+  // ganti hari -> muat jadwal baru
+  if (data.key !== dayKey(w) && !tick.loading) {
+    tick.loading = true;
+    loadSchedule().finally(() => setTimeout(() => tick.loading = false, 300000));
+  }
+}
+
+loadSchedule();
+setInterval(tick, 250);
+</script>
+</body>
+</html>
